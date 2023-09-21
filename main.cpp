@@ -61,20 +61,19 @@ float calc_dist (Eigen::Vector4f plane_param, Eigen::Vector3f point) {
 	return n.dot(point) + plane_param(3);
 }
 
-Eigen::Vector4f ground_segmentation (Eigen::MatrixXf & xyz_loc, float & dist_thres_m, float & cang_thres_rad, int &  max_iter){
+Eigen::Vector4f ground_segmentation (Eigen::MatrixXf & xyz_loc, float & dist_thres_m, float & cang_thres_rad, int &  max_iter, int & num_valid_point){
 	// Implement RANSAC for plane fitting
 	// Improved by using pre rotated xyz array in world frame 
 	// so plane limit can be implemented and reduce amount of impractical samples
 	Eigen::Vector4f plane_param;
 	plane_param << 0,0,1,0;
-	int current_max_census, census, mat_len, iter;
+	int current_max_census, census, iter;
 	current_max_census = 0;
-	mat_len = xyz_loc.cols();
 	iter = 0;
 	int a,b,c;
 	std::random_device rd;
 	std::mt19937 seed(rd());
-	std::uniform_int_distribution<int> gen_ind(0, mat_len - 1);
+	std::uniform_int_distribution<int> gen_ind(0, num_valid_point - 1);
 	while (iter < max_iter){
 		census = 0;
 		a = gen_ind(seed);
@@ -85,7 +84,7 @@ Eigen::Vector4f ground_segmentation (Eigen::MatrixXf & xyz_loc, float & dist_thr
 		if (calc_ctilt (temp) < cang_thres_rad){
 			continue;
 		}
-		int num_test = 3000;
+		int num_test = 100;
 		for (int i = 0; i < num_test; i++){
 			int test_ind = gen_ind(seed);
 			float test_dist = calc_dist(temp, xyz_loc.col(test_ind));
@@ -100,6 +99,63 @@ Eigen::Vector4f ground_segmentation (Eigen::MatrixXf & xyz_loc, float & dist_thr
 		iter++;
 	}
 	return plane_param;
+}
+
+// I don't like how I am sorting now. Need to analyze if this is needed or find better way
+int sort_xyz_class_matrix (Eigen::MatrixXf & xyz_loc, int & num_valid_point){
+	Eigen::MatrixXf temp = xyz_loc;
+	int j = 0;
+	for (int i = 0; i < num_valid_point; i++){
+		if (xyz_loc(2,i) == 0){
+			temp.col(j) = xyz_loc.col(i);
+			j++;
+		}
+	}
+	for (int i = 0; i < num_valid_point; i++){
+		if (xyz_loc(2,i) == 100){
+			temp.col(j) = xyz_loc.col(i);
+			j++;
+		}
+	}
+	for (int i = 0; i < num_valid_point; i++){
+		if (xyz_loc(2,i) == 200){
+			temp.col(j) = xyz_loc.col(i);
+			j++;
+		}
+	}
+	xyz_loc = temp;
+	return 0;
+}
+
+// Classify points into 3 types: ground, negative_obstacle, positive_obstacle for a 2D scan view
+// Replace the 3rd collumn value in the XYZ matrix with: 0 - ground, 100 - negative_obstacle, 200 - positive_obstacle
+// If positive obstacle is higher than some threshold, we can just ignore it to save processing time, and data bandwidth
+// Return number of valid points
+int obstacle_class (Eigen::MatrixXf & xyz_loc, Eigen::Vector4f & ground_param, float & dist_thes_m, int & num_valid_point){
+	int k = 0;
+	for (int i = 0; i < num_valid_point; i++) {
+		float dist = calc_dist (ground_param, xyz_loc.col);
+		// Is ground point
+		if (dist < dist_thres_m && dist > dist_thres_m){
+			xyz_loc(2,i) = 0;
+			k++;
+		}
+		// Is negative obstacles
+		else if(dist >= dist_thres_m && dist < 0.2){
+			xyz_loc(2,i) = 200;
+			k++;
+		}
+		// Is positive obstacles
+		else if(dist <= -dist_thres_m && dist > -0.2) { 
+			xyz_loc(2,i) = 100;
+			k++;
+		}
+		else(){
+			xyz_loc(2,i) = 300;
+		}
+	}
+	sort_xyz_class_matrix (xyz_loc, num_valid_point);
+	return k;
 }
 
 int main (int argc, char **argv) {
@@ -159,16 +215,20 @@ int main (int argc, char **argv) {
 			zed_euler_rad = pose.getEulerAngles();
 			zed_pos_m = pose.getTranslation();
 			Eigen::Matrix3f dcm = rot_pcd_to_world(zed_euler_rad);
+			int k = 0;
 			for (int i = 0; i < width; i++) {
 				for (int j = 0; j < height; j++) {
 					pcd.getValue(i,j, &point3D);
-					xyz_loc (0,i * height + j) = point3D.x * dcm(0,0) + point3D.y * dcm(0,1) + point3D.z * dcm(0,2);
-					xyz_loc (1,i * height + j) = point3D.x * dcm(1,0) + point3D.y * dcm(1,1) + point3D.z * dcm(1,2);
-					xyz_loc (2,i * height + j) = point3D.x * dcm(2,0) + point3D.y * dcm(2,1) + point3D.z * dcm(2,2);
-					//xyz_loc.col(i * height + j) = dcm * xyz_loc.col(i *height + j); 
+					if (std::isfinite(point3D.x)){
+						xyz_loc (0,k) = point3D.x * dcm(0,0) + point3D.y * dcm(0,1) + point3D.z * dcm(0,2);
+						xyz_loc (1,k) = point3D.x * dcm(1,0) + point3D.y * dcm(1,1) + point3D.z * dcm(1,2);
+						xyz_loc (2,k) = point3D.x * dcm(2,0) + point3D.y * dcm(2,1) + point3D.z * dcm(2,2);
+						k++;
+					} 
 				}
 			}	
-			Eigen::Vector4f ground_plane = ground_segmentation (xyz_loc, dist_thres, c_angle_thres, max_seg_iter);
+			Eigen::Vector4f ground_plane = ground_segmentation (xyz_loc, dist_thres, c_angle_thres, max_seg_iter, k);
+			int num_interest_point = obstacle_class (xyz_loc, ground_plane, dist_thres, k);
 			auto t2 = std::chrono::high_resolution_clock::now();
 			std::chrono::duration <double, std::milli> ms_double = t2 - t1;
 			t1 = t2;
