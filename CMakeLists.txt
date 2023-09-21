@@ -1,5 +1,5 @@
 CMAKE_MINIMUM_REQUIRED(VERSION 3.5)
-PROJECT(zed_capture_frame)
+PROJECT(perception)
 
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -12,12 +12,14 @@ endif()
 
 find_package(ZED 3 REQUIRED)
 find_package(CUDA ${ZED_CUDA_VERSION} REQUIRED)
+find_package(Eigen3 REQUIRED)
 
 include_directories(${CUDA_INCLUDE_DIRS})
 include_directories(${ZED_INCLUDE_DIRS})
 
 link_directories(${ZED_LIBRARY_DIR})
 link_directories(${CUDA_LIBRARY_DIRS})
+link_directories(${Eigen_INCLUDE_DIRS})
 
 ADD_EXECUTABLE(${PROJECT_NAME} main.cpp)
 
@@ -27,4 +29,7 @@ else()
     SET(ZED_LIBS ${ZED_STATIC_LIBRARIES} ${CUDA_CUDA_LIBRARY} ${CUDA_LIBRARY})
 endif()
 
-TARGET_LINK_LIBRARIES(${PROJECT_NAME} ${ZED_LIBS})
+TARGET_LINK_LIBRARIES(${PROJECT_NAME}
+       	${ZED_LIBS}
+	${Eigen_LIBRARIES})
+target_compile_options(perception PUBLIC -O3)
