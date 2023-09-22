@@ -9,7 +9,7 @@
 #include <eigen3/Eigen/Geometry>
 #include <random>
 
-Eigen::Matrix3f rot_pcd_to_world (sl::Vector3<float> & euler_rad){
+Eigen::Matrix3f rot_pcd_to_world (auto euler_rad){
 	float cphi, sphi, cpsi, spsi;
 	cphi = cos(euler_rad[0]);
 	sphi = sin(euler_rad[0]);
@@ -20,18 +20,32 @@ Eigen::Matrix3f rot_pcd_to_world (sl::Vector3<float> & euler_rad){
 	axis_align(0,2) = 1;
 	axis_align(1,0) = 1;
 	axis_align(2,1) = 1;
+	axis_align(0,0) = 0;
+	axis_align(0,1) = 0;
+	axis_align(1,1) = 0;
+	axis_align(1,2) = 0;
+	axis_align(2,0) = 0;
+	axis_align(2,2) = 0;
 	// Constuct xrot matrix
 	xrot(0,0) = 1;
+	xrot(0,1) = 0;
+	xrot(0,2) = 0;
+	xrot(1,0) = 0;
 	xrot(1,1) = cphi;
 	xrot(1,2) = -sphi;
+	xrot(2,0) = 0;
 	xrot(2,1) = sphi;
 	xrot(2,2) = cphi;
 	// Construct yrot matrix
 	zrot(0,0) = cpsi;
 	zrot(0,1) = -spsi;
+	zrot(0,2) = 0;
 	zrot(1,0) = spsi;
 	zrot(1,1) = cpsi;
+	zrot(1,2) = 0;
 	zrot(2,2) = 1;
+	zrot(2,0) = 0;
+	zrot(2,1) = 0;
 	// Construct DCM matrix
 	return  axis_align * zrot * xrot;
 }
@@ -74,30 +88,37 @@ Eigen::Vector4f ground_segmentation (Eigen::MatrixXf & xyz_loc, float & dist_thr
 	std::random_device rd;
 	std::mt19937 seed(rd());
 	std::uniform_int_distribution<int> gen_ind(0, num_valid_point - 1);
+	//std::cout<<"Begin ransac\n";
 	while (iter < max_iter){
 		census = 0;
 		a = gen_ind(seed);
 		b = gen_ind(seed);
 		c = gen_ind(seed);
-		std::cout<<xyz_loc.col(a)<<"\n";
 		Eigen::Vector4f temp = calc_plane(xyz_loc.col(a), xyz_loc.col(b), xyz_loc.col(c));
 		if (calc_ctilt (temp) < cang_thres_rad){
+			//std::cout<<"Threshold angle reached\n";
 			continue;
 		}
-		int num_test = 100;
+		
+		int num_test = 50;
 		for (int i = 0; i < num_test; i++){
 			int test_ind = gen_ind(seed);
 			float test_dist = calc_dist(temp, xyz_loc.col(test_ind));
+			//std::cout<<test_dist<<"\n";
 			if (abs(test_dist) < dist_thres_m){
 				census++;
+				//std::cout<<"here\n";
 			}
 		}
 		if (census > current_max_census){
+			//std::cout<<"new high census\n";
 			plane_param = temp;
 			current_max_census = census;
 		}
 		iter++;
 	}
+	//std::cout<<"finish ransac\n";
+	std::cout << plane_param(3)<< "\n";
 	return plane_param;
 }
 
@@ -131,10 +152,10 @@ int sort_xyz_class_matrix (Eigen::MatrixXf & xyz_loc, int & num_valid_point){
 // Replace the 3rd collumn value in the XYZ matrix with: 0 - ground, 100 - negative_obstacle, 200 - positive_obstacle
 // If positive obstacle is higher than some threshold, we can just ignore it to save processing time, and data bandwidth
 // Return number of valid points
-int obstacle_class (Eigen::MatrixXf & xyz_loc, Eigen::Vector4f & ground_param, float & dist_thes_m, int & num_valid_point){
+int obstacle_class (Eigen::MatrixXf & xyz_loc, Eigen::Vector4f & ground_param, float & dist_thres_m, int & num_valid_point){
 	int k = 0;
 	for (int i = 0; i < num_valid_point; i++) {
-		float dist = calc_dist (ground_param, xyz_loc.col);
+		float dist = calc_dist (ground_param, xyz_loc.col(i));
 		// Is ground point
 		if (dist < dist_thres_m && dist > dist_thres_m){
 			xyz_loc(2,i) = 0;
@@ -150,7 +171,7 @@ int obstacle_class (Eigen::MatrixXf & xyz_loc, Eigen::Vector4f & ground_param, f
 			xyz_loc(2,i) = 100;
 			k++;
 		}
-		else(){
+		else {
 			xyz_loc(2,i) = 300;
 		}
 	}
@@ -195,9 +216,6 @@ int main (int argc, char **argv) {
 		std::cout << "ERROR: " << returned_state << ", exit program.\n";
 		return 1;
 	}
-
-	
-	std::cout<<mat_len;
 	sl::Pose pose;
 	sl::Mat img, pcd;
 	sl::float4 point3D;
@@ -205,15 +223,15 @@ int main (int argc, char **argv) {
 	float dist_thres = 0.08f;
 	float c_angle_thres = 0.9994f;
 	int max_seg_iter = 400;
-	sl::Vector3<float> zed_euler_rad, zed_pos_m;
+	//sl::Vector3<float> zed_euler_rad, zed_pos_m;
 	auto t1 = std::chrono::high_resolution_clock::now();
 	while (true) {
 		if (zed.grab() == sl::ERROR_CODE::SUCCESS) {
 			zed.retrieveImage (img, sl::VIEW::LEFT);
 			zed.retrieveMeasure (pcd, sl::MEASURE::XYZ);
 			zed.getPosition (pose, sl::REFERENCE_FRAME::WORLD);
-			zed_euler_rad = pose.getEulerAngles();
-			zed_pos_m = pose.getTranslation();
+			auto zed_euler_rad = pose.getEulerAngles();
+			auto zed_pos_m = pose.getTranslation();
 			Eigen::Matrix3f dcm = rot_pcd_to_world(zed_euler_rad);
 			int k = 0;
 			for (int i = 0; i < width; i++) {
@@ -228,11 +246,11 @@ int main (int argc, char **argv) {
 				}
 			}	
 			Eigen::Vector4f ground_plane = ground_segmentation (xyz_loc, dist_thres, c_angle_thres, max_seg_iter, k);
-			int num_interest_point = obstacle_class (xyz_loc, ground_plane, dist_thres, k);
+			//int num_interest_point = obstacle_class (xyz_loc, ground_plane, dist_thres, k);
 			auto t2 = std::chrono::high_resolution_clock::now();
 			std::chrono::duration <double, std::milli> ms_double = t2 - t1;
 			t1 = t2;
-			std::cout << ms_double.count() << " ms\n";  	
+			//std::cout << ms_double.count() << " ms\n";  	
 		}
 
 	}
